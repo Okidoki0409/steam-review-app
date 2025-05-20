@@ -3,7 +3,9 @@ import requests
 import csv
 import time
 from datetime import datetime, date
-from io import StringIO
+from io import StringIO, BytesIO
+import pandas as pd
+import xlsxwriter  # ✅ 추가: Excel 저장용 엔진 필요
 
 # -----------------------
 # 게임 리스트 (이름 → App ID 매핑)
@@ -20,15 +22,24 @@ game_options = {
 # -----------------------
 st.title("🎮 Steam Review Collector")
 
-selected_game = st.selectbox("Select a game", list(game_options.keys()))
-language = st.selectbox("Select a language", [
+selected_game = st.selectbox("**Select a game**", list(game_options.keys()))
+language = st.selectbox("**Select a language**", [
     "all", "english", "koreana", "schinese", "japanese",
     "german", "french", "spanish", "brazilian", "italian", "polish"
 ])
-date_range = st.date_input("Select date range", [date(2025, 3, 1), date.today()])
-sentiment = st.radio("Recommendation filter", ["All", "Positive only", "Negative only"])
+date_range = st.date_input("**Select date range**", [date(2025, 3, 1), date.today()])
+sentiment = st.radio("**Filter**", ["All", "Positive only", "Negative only"])
 
-run = st.button("Start review collection")
+playtime_filter = st.checkbox("Only include reviews with ≥ 1hr playtime")
+purchased_filter = st.checkbox("Only include reviews from purchased users")
+votes_range = st.slider("**Votes Up Range (100+ included)**",
+    min_value=0,
+    max_value=100,
+    value=(0, 100),
+    step=1
+)
+
+run = st.button("**🚀 Start Review Collection**", type="primary")
 
 if run:
     app_id = game_options[selected_game]
@@ -67,9 +78,19 @@ if run:
 
             if key in seen_keys:
                 continue
+
+            playtime_hrs = review['author'].get('playtime_at_review', 0) / 60
+            purchased = review.get("steam_purchase")
+            votes_up = review.get("votes_up", 0)
+
+            if playtime_filter and playtime_hrs < 1.0:
+                continue
+            if purchased_filter and not purchased:
+                continue
+            if votes_up < votes_range[0]:
+                continue
             seen_keys.add(key)
 
-            # 필터 적용
             review_date = datetime.fromtimestamp(timestamp).date()
             if not (date_range[0] <= review_date <= date_range[1]):
                 continue
@@ -80,7 +101,9 @@ if run:
                 continue
 
             all_reviews.append({
-                "Votes Up": review.get("votes_up", 0),
+                "Votes Up": votes_up,
+                "Playtime (hrs)": "{:.1f} hrs".format(playtime_hrs),
+                "Purchased": "✅" if purchased else "❌",
                 "Author": steamid,
                 "Recommended": "👍" if review["voted_up"] else "👎",
                 "Review": review["review"].replace("\n", " ").strip(),
@@ -95,14 +118,8 @@ if run:
 
     st.success(f"✅ Collected {len(all_reviews)} reviews!")
 
-    # 리뷰 요약 표시
     from collections import Counter
-    import pandas as pd
 
-    # 긍정/부정 리뷰 추출
-    positive_reviews = [r for r in all_reviews if r["Recommended"] == "👍"]
-    negative_reviews = [r for r in all_reviews if r["Recommended"] == "👎"]
-    
     def get_top_reviews(reviews, n=3):
         return sorted(
             reviews,
@@ -110,35 +127,75 @@ if run:
             reverse=True
         )[:n]
 
-    # 간단 요약 생성 함수
     def summarize(text, max_words=30):
         words = text.split()
         return " ".join(words[:max_words]) + ("..." if len(words) > max_words else "")
+
+    # ➕ 긍정/부정 리뷰 리스트 만들기
+    positive_reviews = [r for r in all_reviews if r["Recommended"] == "👍"]
+    negative_reviews = [r for r in all_reviews if r["Recommended"] == "👎"]
+
     st.subheader("📊 Review Summary")
     total = len(all_reviews)
-    positives = sum(1 for r in all_reviews if r["Recommended"] == "👍")
-    negatives = total - positives
+    positives = len(positive_reviews)
+    negatives = len(negative_reviews)
+
     lang_counts = {}
     for r in all_reviews:
         lang = r["Language"]
         lang_counts[lang] = lang_counts.get(lang, 0) + 1
 
+    def get_review_grade(positive_ratio, total_reviews):
+        if total_reviews < 50:
+            return "Not enough data"
+        if total_reviews >= 500:
+            if positive_ratio >= 0.95:
+                return "Overwhelmingly Positive"
+            elif positive_ratio <= 0.05:
+                return "Overwhelmingly Negative"
+        if positive_ratio >= 0.80:
+            return "Very Positive"
+        elif positive_ratio >= 0.70:
+            return "Mostly Positive"
+        elif positive_ratio >= 0.40:
+            return "Mixed"
+        elif positive_ratio >= 0.20:
+            return "Mostly Negative"
+        elif positive_ratio >= 0.05:
+            return "Very Negative"
+        else:
+            return "Overwhelmingly Negative"
+
+    review_grade = get_review_grade(positives / total, total)
+    st.markdown(f"**🔎 Overall Review Rating:** _{review_grade}_")
+
     st.markdown(f"**Total Reviews:** {total}")
     st.markdown(f"**👍 Positive:** {positives}")
     st.markdown(f"**👎 Negative:** {negatives}")
+
+    purchased_count = sum(1 for r in all_reviews if r["Purchased"] == "✅")
+    st.markdown(f"**🛒 Purchased Users:** {purchased_count} / {total} ({purchased_count / total:.1%})")
+
+    def parse_hrs(text):
+        try:
+            return float(text.replace(" hrs", ""))
+        except:
+            return 0
+
+    avg_playtime = sum(parse_hrs(r["Playtime (hrs)"]) for r in all_reviews) / total
+    st.markdown(f"**⏱ Average Playtime:** {avg_playtime:.1f} hrs")
+
+    short_reviews = sum(1 for r in all_reviews if parse_hrs(r["Playtime (hrs)"]) < 1.0)
+    st.markdown(f"**⚠️ Reviews under 1 hour:** {short_reviews} ({short_reviews / total:.1%})")
 
     st.markdown("**Language Distribution:**")
     for lang, count in lang_counts.items():
         st.markdown(f"- {lang}: {count}")
 
-    # 날짜별 리뷰 수 시각화
-    
     date_counts = Counter(r["Posted At"][:10] for r in all_reviews)
     date_df = pd.DataFrame(sorted(date_counts.items()), columns=["Date", "Count"])
     st.bar_chart(date_df.set_index("Date"))
 
-    
-    # 주요 리뷰 표시
     st.markdown("**🔍 Most Notable Positive Reviews:**")
     for r in get_top_reviews(positive_reviews):
         st.markdown(f"- {summarize(r['Review'])}")
@@ -147,15 +204,28 @@ if run:
     for r in get_top_reviews(negative_reviews):
         st.markdown(f"- {summarize(r['Review'])}")
 
-    # CSV 변환
     if all_reviews:
-        output = StringIO()
-        writer = csv.DictWriter(output, fieldnames=all_reviews[0].keys())
+        # CSV 다운로드
+        output_csv = StringIO()
+        writer = csv.DictWriter(output_csv, fieldnames=all_reviews[0].keys())
         writer.writeheader()
         writer.writerows(all_reviews)
         st.download_button(
             label="📥 Download CSV file",
-            data=output.getvalue().encode("utf-8"),
+            data=output_csv.getvalue().encode("utf-8"),
             file_name=f"{selected_game}_reviews.csv",
             mime="text/csv"
+        )
+
+        # Excel 다운로드
+        df = pd.DataFrame(all_reviews)
+        output_excel = BytesIO()
+        writer = pd.ExcelWriter(output_excel, engine='xlsxwriter')
+        df.to_excel(writer, index=False, sheet_name='Reviews')
+        writer.close()
+        st.download_button(
+            label="📥 Download Excel file",
+            data=output_excel.getvalue(),
+            file_name=f"{selected_game}_reviews.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
