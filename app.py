@@ -23,12 +23,23 @@ game_options = {
 st.title("🎮 Steam Review Collector")
 
 selected_game = st.selectbox("**Select a game**", list(game_options.keys()))
-language = st.selectbox("**Select a language**", [
-    "all", "english", "koreana", "schinese", "japanese",
-    "german", "french", "spanish", "brazilian", "italian", "polish"
-])
+language_options = {
+    "ALL LANGUAGES": "all",
+    "ENGLISH": "english",
+    "KOREAN": "koreana",
+    "SIMPLIFIED CHINESE": "schinese",
+    "JAPANESE": "japanese",
+    "GERMAN": "german",
+    "FRENCH": "french",
+    "SPANISH": "spanish",
+    "PORTUGUESE - BRAZIL": "brazilian",
+    "ITALIAN": "italian",
+    "POLISH": "polish"
+}
+language_display = st.selectbox("**Select a language**", list(language_options.keys()))
+language = language_options[language_display]
 date_range = st.date_input("**Select date range**", [date(2025, 3, 1), date.today()])
-sentiment = st.radio("**Filter**", ["All", "Positive only", "Negative only"])
+sentiment = st.radio("**Filter**", ["All", "Positive Only", "Negative Only"])
 
 playtime_filter = st.checkbox("Only include reviews with ≥ 1hr playtime")
 purchased_filter = st.checkbox("Only include reviews from purchased users")
